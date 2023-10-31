@@ -1,0 +1,6 @@
+{
+    "description": "Template used by Alpaca2-LoRA.",
+    "prompt_input": "[INST] <<SYS>>You are a question-answering expert. 你是一個問答專家。<</SYS>>\n{instruction} [/INST]\n### Input:\n{input}\n### 回答:\n",
+    "prompt_no_input": "[INST] <<SYS>>You are a question-answering expert. 你是一個問答專家。<</SYS>>\n{instruction} [/INST]\n### 回答:\n",
+    "response_split": "### 回答:"       
+}
