@@ -39,8 +39,8 @@ def train(
     micro_batch_size: int = 16,
     num_epochs: int = 3,
     learning_rate: float = 3e-4,
-    cutoff_len: int = 256,
-    val_set_size: int = 100,
+    cutoff_len: int = 1024,
+    val_set_size: int = 1000,
     # lora hyperparams
     lora_r: int = 8,
     lora_alpha: int = 16,
@@ -51,7 +51,7 @@ def train(
     ],
     # llm hyperparams
     train_on_inputs: bool = True,  # if False, masks out inputs in loss
-    add_eos_token: bool = False,
+    add_eos_token: bool = True,
     group_by_length: bool = False,  # faster, but produces an odd training loss curve
     # wandb params
     wandb_project: str = "",
@@ -89,7 +89,7 @@ def train(
             f"wandb_log_model: {wandb_log_model}\n"
             f"resume_from_checkpoint: {resume_from_checkpoint or False}\n"
             f"prompt template: {prompt_template_name}\n"
-            f"offload_folder: {offload_folder}\n",
+            f"offload_folder: {offload_folder}\n"
             f"ds_config_path: {ds_config_path}\n",
         )
     assert (
@@ -293,7 +293,7 @@ def train(
 
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
-    model.save_pretrained(output_dir)
+    trainer.save_model(output_dir)
 
     print(
         "\n If there's a warning about missing keys above, please disregard :)"
