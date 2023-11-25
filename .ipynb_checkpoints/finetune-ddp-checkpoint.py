@@ -23,7 +23,17 @@ from transformers import LlamaForCausalLM, LlamaTokenizer, BitsAndBytesConfig, A
 from accelerate import init_empty_weights, infer_auto_device_map
 from utils.prompter import Prompter
 
-torch.distributed.init_process_group(backend='nccl')
+from optimum.bettertransformer import BetterTransformer
+import torch.distributed as dist
+# from torch.distributed.fsdp import (
+#    FullyShardedDataParallel,
+#    CPUOffload,
+# )
+# from torch.distributed.fsdp.wrap import (
+#    default_auto_wrap_policy,
+# )
+
+
 # os.environ["MASTER_ADDR"] = "localhost"
 # os.environ["MASTER_PORT"] = "9994"  # modify if RuntimeError: Address already in use
 # os.environ["RANK"] = "0"
@@ -36,12 +46,12 @@ def train(
     data_path: str = "yahma/alpaca-cleaned",
     output_dir: str = "./lora-alpaca",
     # training hyperparams
-    batch_size: int = 8,
-    micro_batch_size: int = 2,
+    batch_size: int = 64,
+    micro_batch_size: int = 16,
     num_epochs: int = 3,
     learning_rate: float = 3e-4,
     cutoff_len: int = 1024,
-    val_set_size: int = 20,
+    val_set_size: int = 1000,
     # lora hyperparams
     lora_r: int = 8,
     lora_alpha: int = 16,
@@ -63,7 +73,7 @@ def train(
     prompt_template_name: str = "alpaca",  # The prompt template to use, will default to alpaca.
     # Deepspeed
     offload_folder: str = "", # Offload param path
-    ds_config_path: str = "ds_config_zero2.json", 
+    ds_config_path: str = "ds_config_zero3.json", 
 ):
     if int(os.environ.get("LOCAL_RANK", 0)) == 0:
         print(
@@ -98,13 +108,15 @@ def train(
     ), "Please specify a --base_model, e.g. --base_model='huggyllama/llama-7b'"
     
     gradient_accumulation_steps = batch_size // micro_batch_size
-    prompter = Prompter(prompt_template_name)
 
-    device_map = "auto"
-    world_size = int(os.environ.get("WORLD_SIZE", 1))
-    # print(f'gradient_accumulation_steps: {gradient_accumulation_steps}')
-    # print(f'world_size: {world_size}')
+    prompter = Prompter(prompt_template_name)
     
+    dist.init_process_group(backend='nccl')
+    dist.barrier()
+    world_size = dist.get_world_size()
+    
+    device_map = "auto"
+    # world_size = int(os.environ.get("WORLD_SIZE", 1))
     ddp = world_size != 1
     if ddp:
         device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
@@ -121,14 +133,16 @@ def train(
         os.environ["WANDB_WATCH"] = wandb_watch
     if len(wandb_log_model) > 0:
         os.environ["WANDB_LOG_MODEL"] = wandb_log_model
-    quantization_config = BitsAndBytesConfig(load_in_8bit=True,llm_int8_enable_fp32_cpu_offload=True)
-    # config = AutoConfig.from_pretrained(base_model)
+    # quantization_config = BitsAndBytesConfig(load_in_8bit=True,llm_int8_enable_fp32_cpu_offload=True)
+    config = AutoConfig.from_pretrained(base_model)
 
-    # with init_empty_weights():
-    #     model = AutoModelForCausalLM.from_config(config)
+    with init_empty_weights():
+        model = AutoModelForCausalLM.from_config(config)
+    model = BetterTransformer.transform(model)
+    model.to(torch.bfloat16)
     # device_map = infer_auto_device_map(model, max_memory={0: "15GiB", "cpu": "40GiB"})
     # print(device_map)
-    print('micro_batch_size,gradient_accumulation_steps',micro_batch_size,gradient_accumulation_steps,world_size)
+
     training_args = transformers.TrainingArguments(
             per_device_train_batch_size=micro_batch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
@@ -149,17 +163,22 @@ def train(
             group_by_length=group_by_length,
             report_to="wandb" if use_wandb else None,
             run_name=wandb_run_name if use_wandb else None,
-            deepspeed=ds_config_path,
+            # deepspeed=ds_config_path,
         )
 
-    model = LlamaForCausalLM.from_pretrained(
-        base_model,
-        torch_dtype=torch.float16,
-        # device_map=device_map,
-        quantization_config=quantization_config,
-        offload_folder=offload_folder
-    )
-    
+    # model = LlamaForCausalLM.from_pretrained(
+    #     base_model,
+    #     torch_dtype=torch.bfloat16,
+    #     # device_map=device_map,
+    #     # quantization_config=quantization_config,
+    #     offload_folder=offload_folder
+    # )
+    # model = DistributedDataParallel(model)
+    # fsdp_model = FullyShardedDataParallel(
+    #                model(),
+    #                fsdp_auto_wrap_policy=default_auto_wrap_policy,
+    #                cpu_offload=CPUOffload(offload_params=True),
+    #             )
     tokenizer = LlamaTokenizer.from_pretrained(base_model)
 
     tokenizer.pad_token_id = (
@@ -215,7 +234,7 @@ def train(
             ]  # could be sped up, probably
         return tokenized_full_prompt
 
-    model = prepare_model_for_kbit_training(model)
+    # model = prepare_model_for_kbit_training(model)
 
     config = LoraConfig(
         r=lora_r,
@@ -226,7 +245,7 @@ def train(
         task_type="CAUSAL_LM",
     )
     model = get_peft_model(model, config)
-    # model = accelerator.prepare(model)
+
     if data_path.endswith(".json") or data_path.endswith(".jsonl"):
         data = load_dataset("json", data_files=data_path)
     else:
