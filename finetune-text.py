@@ -23,6 +23,8 @@ from transformers import LlamaForCausalLM, LlamaTokenizer, BitsAndBytesConfig, A
 from accelerate import init_empty_weights, infer_auto_device_map
 from utils.prompter import Prompter
 
+from deepspeed.utils.zero_to_fp32 import get_fp32_state_dict_from_zero_checkpoint
+
 torch.distributed.init_process_group(backend='nccl')
 # os.environ["MASTER_ADDR"] = "localhost"
 # os.environ["MASTER_PORT"] = "9994"  # modify if RuntimeError: Address already in use
@@ -41,7 +43,7 @@ def train(
     num_epochs: int = 3,
     learning_rate: float = 3e-4,
     cutoff_len: int = 1024,
-    val_set_size: int = 20,
+    val_set_size: int = 1000,
     # lora hyperparams
     lora_r: int = 8,
     lora_alpha: int = 16,
@@ -140,8 +142,8 @@ def train(
             optim="adamw_torch",
             evaluation_strategy="steps" if val_set_size > 0 else "no",
             save_strategy="steps",
-            eval_steps=200 if val_set_size > 0 else None,
-            save_steps=200,
+            eval_steps=100 if val_set_size > 0 else None,
+            save_steps=100,
             output_dir=output_dir,
             save_total_limit=3,
             load_best_model_at_end=True if val_set_size > 0 else False,
@@ -154,8 +156,8 @@ def train(
 
     model = LlamaForCausalLM.from_pretrained(
         base_model,
-        torch_dtype=torch.float16,
-        # device_map=device_map,
+        torch_dtype=torch.bfloat16,
+        device_map=device_map,
         quantization_config=quantization_config,
         offload_folder=offload_folder
     )
@@ -190,31 +192,28 @@ def train(
         return result
 
     def generate_and_tokenize_prompt(data_point):
-        full_prompt = prompter.generate_prompt(
-            data_point["instruction"],
-            data_point["input"],
-            data_point["output"],
+
+        tokenized_full_prompt = tokenize(
+            data_point["text"], add_eos_token=add_eos_token
         )
-        tokenized_full_prompt = tokenize(full_prompt)
-        if not train_on_inputs:
-            user_prompt = prompter.generate_prompt(
-                data_point["instruction"], data_point["input"]
-            )
-            tokenized_user_prompt = tokenize(
-                user_prompt, add_eos_token=add_eos_token
-            )
-            user_prompt_len = len(tokenized_user_prompt["input_ids"])
 
-            if add_eos_token:
-                user_prompt_len -= 1
-
-            tokenized_full_prompt["labels"] = [
-                -100
-            ] * user_prompt_len + tokenized_full_prompt["labels"][
-                user_prompt_len:
-            ]  # could be sped up, probably
         return tokenized_full_prompt
 
+    if not data_path.endswith(".txt"):
+        raise AssertionError(f"The data source should be an .txt file.")
+
+    # with open(data_path, "r") as input_file:
+    data = load_dataset(
+            "text", data_files={"train": data_path}, sample_by="paragraph"
+        )
+    train_val = data["train"].train_test_split(
+        test_size=val_set_size, shuffle=True, seed=42
+    )
+    train_data = train_val["train"].shuffle().map(generate_and_tokenize_prompt)
+    val_data = train_val["test"].shuffle().map(generate_and_tokenize_prompt)
+
+
+    
     model = prepare_model_for_kbit_training(model)
 
     config = LoraConfig(
@@ -226,11 +225,7 @@ def train(
         task_type="CAUSAL_LM",
     )
     model = get_peft_model(model, config)
-    # model = accelerator.prepare(model)
-    if data_path.endswith(".json") or data_path.endswith(".jsonl"):
-        data = load_dataset("json", data_files=data_path)
-    else:
-        data = load_dataset(data_path)
+
 
     if resume_from_checkpoint:
         # Check the available weights and load them
@@ -254,25 +249,12 @@ def train(
 
     model.print_trainable_parameters()  # Be more transparent about the % of trainable params.
 
-    if val_set_size > 0:
-        train_val = data["train"].train_test_split(
-            test_size=val_set_size, shuffle=True, seed=42
-        )
-        train_data = (
-            train_val["train"].shuffle().map(generate_and_tokenize_prompt)
-        )
-        val_data = (
-            train_val["test"].shuffle().map(generate_and_tokenize_prompt)
-        )
-    else:
-        train_data = data["train"].shuffle().map(generate_and_tokenize_prompt)
-        val_data = None
 
     if not ddp and torch.cuda.device_count() > 1:
         # keeps Trainer from trying its own DataParallelism when more than 1 gpu is available
         model.is_parallelizable = True
         model.model_parallel = True
-
+    print('Start training')
     trainer = transformers.Trainer(
         model=model,
         train_dataset=train_data,
@@ -295,10 +277,14 @@ def train(
         model = torch.compile(model)
 
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-    trainer.model.save_pretrained(output_dir)
-    tokenizer.save_pretrained(output_dir)
+
     trainer.save_model(output_dir)
-    trainer.model.config.to_json_file(output_dir+"/config.json")
+    trainer.model.save_pretrained(output_dir+'model')
+    
+    state_dict = get_fp32_state_dict_from_zero_checkpoint(output_dir) # already on cpu
+    d = get_peft_model_state_dict(model, state_dict=state_dict)
+    torch.save(d, f"{output_dir}/adapter_model.bin")
+    
     print(
         "\n If there's a warning about missing keys above, please disregard :)"
     )
