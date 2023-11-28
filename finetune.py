@@ -40,8 +40,8 @@ def train(
     data_path: str = "yahma/alpaca-cleaned",
     output_dir: str = "./lora-alpaca",
     # training hyperparams
-    batch_size: int = 64,
-    micro_batch_size: int = 1,
+    batch_size: int = 128,
+    micro_batch_size: int = 2,
     num_epochs: int = 3,
     learning_rate: float = 3e-4,
     cutoff_len: int = 1024,
@@ -232,8 +232,8 @@ def train(
     #             task_type="CAUSAL_LM",
     #         )
     # model = get_peft_model(model, config)
+    model = prepare_model_for_kbit_training(model)
     if lora_config == '':
-        model = prepare_model_for_kbit_training(model)
         config = LoraConfig(
             r=lora_r,
             lora_alpha=lora_alpha,
@@ -246,7 +246,7 @@ def train(
     else:
         model = PeftModel.from_pretrained(model, lora_config, is_trainable=True)
         model._mark_only_adapters_as_trainable()
-    
+
     # model = accelerator.prepare(model)
     if data_path.endswith(".json") or data_path.endswith(".jsonl"):
         data = load_dataset("json", data_files=data_path)
