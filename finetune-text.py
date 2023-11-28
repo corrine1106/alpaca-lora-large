@@ -142,8 +142,8 @@ def train(
             optim="adamw_torch",
             evaluation_strategy="steps" if val_set_size > 0 else "no",
             save_strategy="steps",
-            eval_steps=100 if val_set_size > 0 else None,
-            save_steps=100,
+            eval_steps=200 if val_set_size > 0 else None,
+            save_steps=200,
             output_dir=output_dir,
             save_total_limit=3,
             load_best_model_at_end=True if val_set_size > 0 else False,
@@ -279,11 +279,6 @@ def train(
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
     trainer.save_model(output_dir)
-    trainer.model.save_pretrained(output_dir+'model')
-    
-    state_dict = get_fp32_state_dict_from_zero_checkpoint(output_dir) # already on cpu
-    d = get_peft_model_state_dict(model, state_dict=state_dict)
-    torch.save(d, f"{output_dir}/adapter_model.bin")
     
     print(
         "\n If there's a warning about missing keys above, please disregard :)"

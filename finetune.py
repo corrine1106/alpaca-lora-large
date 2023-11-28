@@ -18,10 +18,14 @@ from peft import (
     get_peft_model_state_dict,
     prepare_model_for_kbit_training,
     set_peft_model_state_dict,
+    PeftModel,
 )
 from transformers import LlamaForCausalLM, LlamaTokenizer, BitsAndBytesConfig, AutoConfig, AutoModelForCausalLM
 from accelerate import init_empty_weights, infer_auto_device_map
 from utils.prompter import Prompter
+import deepspeed
+
+deepspeed.ops.op_builder.CPUAdamBuilder().load()
 
 torch.distributed.init_process_group(backend='nccl')
 # os.environ["MASTER_ADDR"] = "localhost"
@@ -36,8 +40,8 @@ def train(
     data_path: str = "yahma/alpaca-cleaned",
     output_dir: str = "./lora-alpaca",
     # training hyperparams
-    batch_size: int = 128,
-    micro_batch_size: int = 2,
+    batch_size: int = 64,
+    micro_batch_size: int = 1,
     num_epochs: int = 3,
     learning_rate: float = 3e-4,
     cutoff_len: int = 1024,
@@ -216,8 +220,20 @@ def train(
             ]  # could be sped up, probably
         return tokenized_full_prompt
 
-    model = prepare_model_for_kbit_training(model)
+
+    # if lora_config != '':
+    #     model = PeftModel.from_pretrained(model, lora_config)
+    # config = LoraConfig(
+    #             r=lora_r,
+    #             lora_alpha=lora_alpha,
+    #             target_modules=lora_target_modules,
+    #             lora_dropout=lora_dropout,
+    #             bias="none",
+    #             task_type="CAUSAL_LM",
+    #         )
+    # model = get_peft_model(model, config)
     if lora_config == '':
+        model = prepare_model_for_kbit_training(model)
         config = LoraConfig(
             r=lora_r,
             lora_alpha=lora_alpha,
@@ -228,7 +244,8 @@ def train(
         )
         model = get_peft_model(model, config)
     else:
-        model = PeftModel.from_pretrained(model, lora_config)
+        model = PeftModel.from_pretrained(model, lora_config, is_trainable=True)
+        model._mark_only_adapters_as_trainable()
     
     # model = accelerator.prepare(model)
     if data_path.endswith(".json") or data_path.endswith(".jsonl"):
@@ -301,7 +318,7 @@ def train(
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     trainer.model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
-    trainer.save_model(output_dir)
+
     trainer.model.config.to_json_file(output_dir+"/config.json")
     print(
         "\n If there's a warning about missing keys above, please disregard :)"
