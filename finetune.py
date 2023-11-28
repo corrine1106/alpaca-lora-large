@@ -43,6 +43,7 @@ def train(
     cutoff_len: int = 1024,
     val_set_size: int = 20,
     # lora hyperparams
+    lora_config: str = '',
     lora_r: int = 8,
     lora_alpha: int = 16,
     lora_dropout: float = 0.05,
@@ -216,16 +217,19 @@ def train(
         return tokenized_full_prompt
 
     model = prepare_model_for_kbit_training(model)
-
-    config = LoraConfig(
-        r=lora_r,
-        lora_alpha=lora_alpha,
-        target_modules=lora_target_modules,
-        lora_dropout=lora_dropout,
-        bias="none",
-        task_type="CAUSAL_LM",
-    )
-    model = get_peft_model(model, config)
+    if lora_config == '':
+        config = LoraConfig(
+            r=lora_r,
+            lora_alpha=lora_alpha,
+            target_modules=lora_target_modules,
+            lora_dropout=lora_dropout,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+        model = get_peft_model(model, config)
+    else:
+        model = PeftModel.from_pretrained(model, lora_config)
+    
     # model = accelerator.prepare(model)
     if data_path.endswith(".json") or data_path.endswith(".jsonl"):
         data = load_dataset("json", data_files=data_path)
