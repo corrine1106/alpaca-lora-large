@@ -264,7 +264,7 @@ def train(
         elif os.path.exists(safe_checkpoint_name):
             print(f"Restarting from {safe_checkpoint_name}")
             adapters_weights = {}
-            with safe_open("model.safetensors", framework="pt", device=0) as f:
+            with safe_open(safe_checkpoint_name, framework="pt", device=0) as f:
                 for k in f.keys():
                     adapters_weights[k] = f.get_tensor(k)
             set_peft_model_state_dict(model, adapters_weights)
