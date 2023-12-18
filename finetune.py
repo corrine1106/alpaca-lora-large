@@ -21,19 +21,18 @@ from peft import (
     PeftModel,
 )
 from transformers import LlamaForCausalLM, LlamaTokenizer, BitsAndBytesConfig, AutoConfig, AutoModelForCausalLM
+from transformers.trainer_callback import TrainerCallback
 from accelerate import init_empty_weights, infer_auto_device_map
 from utils.prompter import Prompter
 import deepspeed
-
-deepspeed.ops.op_builder.CPUAdamBuilder().load()
-
-torch.distributed.init_process_group(backend='nccl')
+from safetensors import safe_open
 # os.environ["MASTER_ADDR"] = "localhost"
 # os.environ["MASTER_PORT"] = "9994"  # modify if RuntimeError: Address already in use
 # os.environ["RANK"] = "0"
 # os.environ["LOCAL_RANK"] = "0"
 # os.environ["WORLD_SIZE"] = "1"
 
+            
 def train(
     # model/data params
     base_model: str = "",  # the only required argument
@@ -68,7 +67,7 @@ def train(
     prompt_template_name: str = "alpaca",  # The prompt template to use, will default to alpaca.
     # Deepspeed
     offload_folder: str = "", # Offload param path
-    ds_config_path: str = "ds_config_zero2.json", 
+    ds_config_path: str = "ds_config_zero3.json", 
 ):
     if int(os.environ.get("LOCAL_RANK", 0)) == 0:
         print(
@@ -145,10 +144,10 @@ def train(
             optim="adamw_torch",
             evaluation_strategy="steps" if val_set_size > 0 else "no",
             save_strategy="steps",
-            eval_steps=200 if val_set_size > 0 else None,
-            save_steps=200,
+            eval_steps=50 if val_set_size > 0 else None,
+            save_steps=100,
             output_dir=output_dir,
-            save_total_limit=3,
+            save_total_limit=1,
             load_best_model_at_end=True if val_set_size > 0 else False,
             ddp_find_unused_parameters=False if ddp else None,
             group_by_length=group_by_length,
@@ -162,9 +161,10 @@ def train(
         torch_dtype=torch.float16,
         # device_map=device_map,
         quantization_config=quantization_config,
-        offload_folder=offload_folder
+        offload_folder=offload_folder,
+        attn_implementation="flash_attention_2",
     )
-    
+    # model = model.to_bettertransformer()
     tokenizer = LlamaTokenizer.from_pretrained(base_model)
 
     tokenizer.pad_token_id = (
@@ -220,18 +220,6 @@ def train(
             ]  # could be sped up, probably
         return tokenized_full_prompt
 
-
-    # if lora_config != '':
-    #     model = PeftModel.from_pretrained(model, lora_config)
-    # config = LoraConfig(
-    #             r=lora_r,
-    #             lora_alpha=lora_alpha,
-    #             target_modules=lora_target_modules,
-    #             lora_dropout=lora_dropout,
-    #             bias="none",
-    #             task_type="CAUSAL_LM",
-    #         )
-    # model = get_peft_model(model, config)
     model = prepare_model_for_kbit_training(model)
     if lora_config == '':
         config = LoraConfig(
@@ -262,6 +250,9 @@ def train(
             checkpoint_name = os.path.join(
                 resume_from_checkpoint, "adapter_model.bin"
             )  # only LoRA model - LoRA config above has to fit
+            safe_checkpoint_name = os.path.join(
+                resume_from_checkpoint, "adapter_model.safetensors"
+            )  # only LoRA model - LoRA config above has to fit
             resume_from_checkpoint = (
                 False  # So the trainer won't try loading its state
             )
@@ -269,6 +260,13 @@ def train(
         if os.path.exists(checkpoint_name):
             print(f"Restarting from {checkpoint_name}")
             adapters_weights = torch.load(checkpoint_name)
+            set_peft_model_state_dict(model, adapters_weights)
+        elif os.path.exists(safe_checkpoint_name):
+            print(f"Restarting from {safe_checkpoint_name}")
+            adapters_weights = {}
+            with safe_open("model.safetensors", framework="pt", device=0) as f:
+                for k in f.keys():
+                    adapters_weights[k] = f.get_tensor(k)
             set_peft_model_state_dict(model, adapters_weights)
         else:
             print(f"Checkpoint {checkpoint_name} not found")
@@ -293,6 +291,7 @@ def train(
         # keeps Trainer from trying its own DataParallelism when more than 1 gpu is available
         model.is_parallelizable = True
         model.model_parallel = True
+
 
     trainer = transformers.Trainer(
         model=model,
