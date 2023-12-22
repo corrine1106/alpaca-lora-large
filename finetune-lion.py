@@ -294,7 +294,7 @@ def train(
         model.is_parallelizable = True
         model.model_parallel = True
 
-    opt = Lion(model.parameters(), lr=learning_rate, weight_decay=1e-2)
+    opt = Lion(filter(lambda p: p.requires_grad, model.parameters()), lr=learning_rate, weight_decay=1e-2)
     trainer = transformers.Trainer(
         model=model,
         optimizers=(opt, None),
