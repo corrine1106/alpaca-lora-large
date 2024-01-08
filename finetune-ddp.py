@@ -19,7 +19,7 @@ from peft import (
     prepare_model_for_kbit_training,
     set_peft_model_state_dict,
 )
-from transformers import LlamaForCausalLM, LlamaTokenizer, BitsAndBytesConfig, AutoConfig, AutoModelForCausalLM
+from transformers import BitsAndBytesConfig, AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from accelerate import init_empty_weights, infer_auto_device_map
 from utils.prompter import Prompter
 
@@ -179,7 +179,7 @@ def train(
     #                fsdp_auto_wrap_policy=default_auto_wrap_policy,
     #                cpu_offload=CPUOffload(offload_params=True),
     #             )
-    tokenizer = LlamaTokenizer.from_pretrained(base_model)
+    tokenizer = AutoTokenizer.from_pretrained(base_model)
 
     tokenizer.pad_token_id = (
         0  # unk. we want this to be different from the eos token
