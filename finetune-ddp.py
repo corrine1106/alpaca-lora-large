@@ -19,12 +19,18 @@ from peft import (
     prepare_model_for_kbit_training,
     set_peft_model_state_dict,
 )
-from transformers import BitsAndBytesConfig, AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from transformers import (
+    BitsAndBytesConfig,
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoTokenizer,
+)
 from accelerate import init_empty_weights, infer_auto_device_map
 from utils.prompter import Prompter
 
 from optimum.bettertransformer import BetterTransformer
 import torch.distributed as dist
+
 # from torch.distributed.fsdp import (
 #    FullyShardedDataParallel,
 #    CPUOffload,
@@ -39,6 +45,7 @@ import torch.distributed as dist
 # os.environ["RANK"] = "0"
 # os.environ["LOCAL_RANK"] = "0"
 # os.environ["WORLD_SIZE"] = "1"
+
 
 def train(
     # model/data params
@@ -72,8 +79,8 @@ def train(
     resume_from_checkpoint: str = None,  # either training checkpoint or final adapter
     prompt_template_name: str = "alpaca",  # The prompt template to use, will default to alpaca.
     # Deepspeed
-    offload_folder: str = "", # Offload param path
-    ds_config_path: str = "ds_config_zero3.json", 
+    offload_folder: str = "",  # Offload param path
+    ds_config_path: str = "ds_config_zero3.json",
 ):
     if int(os.environ.get("LOCAL_RANK", 0)) == 0:
         print(
@@ -106,15 +113,15 @@ def train(
     assert (
         base_model
     ), "Please specify a --base_model, e.g. --base_model='huggyllama/llama-7b'"
-    
+
     gradient_accumulation_steps = batch_size // micro_batch_size
 
     prompter = Prompter(prompt_template_name)
-    
-    dist.init_process_group(backend='nccl')
+
+    dist.init_process_group(backend="nccl")
     dist.barrier()
     world_size = dist.get_world_size()
-    
+
     device_map = "auto"
     # world_size = int(os.environ.get("WORLD_SIZE", 1))
     ddp = world_size != 1
@@ -144,27 +151,27 @@ def train(
     # print(device_map)
 
     training_args = transformers.TrainingArguments(
-            per_device_train_batch_size=micro_batch_size,
-            gradient_accumulation_steps=gradient_accumulation_steps,
-            warmup_steps=100,
-            num_train_epochs=num_epochs,
-            learning_rate=learning_rate,
-            fp16=True,
-            logging_steps=10,
-            optim="adamw_torch",
-            evaluation_strategy="steps" if val_set_size > 0 else "no",
-            save_strategy="steps",
-            eval_steps=200 if val_set_size > 0 else None,
-            save_steps=200,
-            output_dir=output_dir,
-            save_total_limit=3,
-            load_best_model_at_end=True if val_set_size > 0 else False,
-            ddp_find_unused_parameters=False if ddp else None,
-            group_by_length=group_by_length,
-            report_to="wandb" if use_wandb else None,
-            run_name=wandb_run_name if use_wandb else None,
-            # deepspeed=ds_config_path,
-        )
+        per_device_train_batch_size=micro_batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        warmup_steps=100,
+        num_train_epochs=num_epochs,
+        learning_rate=learning_rate,
+        fp16=True,
+        logging_steps=10,
+        optim="adamw_torch",
+        evaluation_strategy="steps" if val_set_size > 0 else "no",
+        save_strategy="steps",
+        eval_steps=200 if val_set_size > 0 else None,
+        save_steps=200,
+        output_dir=output_dir,
+        save_total_limit=3,
+        load_best_model_at_end=True if val_set_size > 0 else False,
+        ddp_find_unused_parameters=False if ddp else None,
+        group_by_length=group_by_length,
+        report_to="wandb" if use_wandb else None,
+        run_name=wandb_run_name if use_wandb else None,
+        # deepspeed=ds_config_path,
+    )
 
     # model = LlamaForCausalLM.from_pretrained(
     #     base_model,

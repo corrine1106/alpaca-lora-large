@@ -20,7 +20,13 @@ from peft import (
     set_peft_model_state_dict,
     PeftModel,
 )
-from transformers import LlamaForCausalLM, LlamaTokenizer, BitsAndBytesConfig, AutoConfig, AutoModelForCausalLM
+from transformers import (
+    LlamaForCausalLM,
+    LlamaTokenizer,
+    BitsAndBytesConfig,
+    AutoConfig,
+    AutoModelForCausalLM,
+)
 from transformers.trainer_callback import TrainerCallback
 from accelerate import init_empty_weights, infer_auto_device_map
 from utils.prompter import Prompter
@@ -28,13 +34,14 @@ import deepspeed
 from safetensors import safe_open
 
 from lion_pytorch import Lion
+
 # os.environ["MASTER_ADDR"] = "localhost"
 # os.environ["MASTER_PORT"] = "9994"  # modify if RuntimeError: Address already in use
 # os.environ["RANK"] = "0"
 # os.environ["LOCAL_RANK"] = "0"
 # os.environ["WORLD_SIZE"] = "1"
 
-            
+
 def train(
     # model/data params
     base_model: str = "",  # the only required argument
@@ -48,7 +55,7 @@ def train(
     cutoff_len: int = 1024,
     val_set_size: int = 20,
     # lora hyperparams
-    lora_config: str = '',
+    lora_config: str = "",
     lora_r: int = 8,
     lora_alpha: int = 16,
     lora_dropout: float = 0.05,
@@ -68,8 +75,8 @@ def train(
     resume_from_checkpoint: str = None,  # either training checkpoint or final adapter
     prompt_template_name: str = "alpaca",  # The prompt template to use, will default to alpaca.
     # Deepspeed
-    offload_folder: str = "", # Offload param path
-    ds_config_path: str = "ds_config_zero3.json", 
+    offload_folder: str = "",  # Offload param path
+    ds_config_path: str = "ds_config_zero3.json",
 ):
     if int(os.environ.get("LOCAL_RANK", 0)) == 0:
         print(
@@ -102,7 +109,7 @@ def train(
     assert (
         base_model
     ), "Please specify a --base_model, e.g. --base_model='huggyllama/llama-7b'"
-    
+
     gradient_accumulation_steps = batch_size // micro_batch_size
     prompter = Prompter(prompt_template_name)
 
@@ -110,7 +117,7 @@ def train(
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     # print(f'gradient_accumulation_steps: {gradient_accumulation_steps}')
     # print(f'world_size: {world_size}')
-    
+
     ddp = world_size != 1
     if ddp:
         device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
@@ -127,36 +134,43 @@ def train(
         os.environ["WANDB_WATCH"] = wandb_watch
     if len(wandb_log_model) > 0:
         os.environ["WANDB_LOG_MODEL"] = wandb_log_model
-    quantization_config = BitsAndBytesConfig(load_in_8bit=True,llm_int8_enable_fp32_cpu_offload=True)
+    quantization_config = BitsAndBytesConfig(
+        load_in_8bit=True, llm_int8_enable_fp32_cpu_offload=True
+    )
     # config = AutoConfig.from_pretrained(base_model)
 
     # with init_empty_weights():
     #     model = AutoModelForCausalLM.from_config(config)
     # device_map = infer_auto_device_map(model, max_memory={0: "15GiB", "cpu": "40GiB"})
     # print(device_map)
-    print('micro_batch_size,gradient_accumulation_steps',micro_batch_size,gradient_accumulation_steps,world_size)
+    print(
+        "micro_batch_size,gradient_accumulation_steps",
+        micro_batch_size,
+        gradient_accumulation_steps,
+        world_size,
+    )
     training_args = transformers.TrainingArguments(
-            per_device_train_batch_size=micro_batch_size,
-            gradient_accumulation_steps=gradient_accumulation_steps,
-            warmup_steps=100,
-            num_train_epochs=num_epochs,
-            learning_rate=learning_rate,
-            fp16=True,
-            logging_steps=10,
-            # optim="adamw_torch",
-            evaluation_strategy="steps" if val_set_size > 0 else "no",
-            save_strategy="steps",
-            eval_steps=50 if val_set_size > 0 else None,
-            save_steps=100,
-            output_dir=output_dir,
-            save_total_limit=1,
-            load_best_model_at_end=True if val_set_size > 0 else False,
-            ddp_find_unused_parameters=False if ddp else None,
-            group_by_length=group_by_length,
-            report_to="wandb" if use_wandb else None,
-            run_name=wandb_run_name if use_wandb else None,
-            # deepspeed=ds_config_path,
-        )
+        per_device_train_batch_size=micro_batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        warmup_steps=100,
+        num_train_epochs=num_epochs,
+        learning_rate=learning_rate,
+        fp16=True,
+        logging_steps=10,
+        # optim="adamw_torch",
+        evaluation_strategy="steps" if val_set_size > 0 else "no",
+        save_strategy="steps",
+        eval_steps=50 if val_set_size > 0 else None,
+        save_steps=100,
+        output_dir=output_dir,
+        save_total_limit=1,
+        load_best_model_at_end=True if val_set_size > 0 else False,
+        ddp_find_unused_parameters=False if ddp else None,
+        group_by_length=group_by_length,
+        report_to="wandb" if use_wandb else None,
+        run_name=wandb_run_name if use_wandb else None,
+        # deepspeed=ds_config_path,
+    )
 
     model = LlamaForCausalLM.from_pretrained(
         base_model,
@@ -223,7 +237,7 @@ def train(
         return tokenized_full_prompt
 
     model = prepare_model_for_kbit_training(model)
-    if lora_config == '':
+    if lora_config == "":
         config = LoraConfig(
             r=lora_r,
             lora_alpha=lora_alpha,
@@ -234,7 +248,9 @@ def train(
         )
         model = get_peft_model(model, config)
     else:
-        model = PeftModel.from_pretrained(model, lora_config, is_trainable=True)
+        model = PeftModel.from_pretrained(
+            model, lora_config, is_trainable=True
+        )
         model._mark_only_adapters_as_trainable()
 
     # model = accelerator.prepare(model)
@@ -266,7 +282,9 @@ def train(
         elif os.path.exists(safe_checkpoint_name):
             print(f"Restarting from {safe_checkpoint_name}")
             adapters_weights = {}
-            with safe_open(safe_checkpoint_name, framework="pt", device=0) as f:
+            with safe_open(
+                safe_checkpoint_name, framework="pt", device=0
+            ) as f:
                 for k in f.keys():
                     adapters_weights[k] = f.get_tensor(k)
             set_peft_model_state_dict(model, adapters_weights)
@@ -294,7 +312,11 @@ def train(
         model.is_parallelizable = True
         model.model_parallel = True
 
-    opt = Lion(filter(lambda p: p.requires_grad, model.parameters()), lr=learning_rate, weight_decay=1e-2)
+    opt = Lion(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=learning_rate,
+        weight_decay=1e-2,
+    )
     trainer = transformers.Trainer(
         model=model,
         optimizers=(opt, None),
@@ -321,7 +343,7 @@ def train(
     trainer.model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
 
-    trainer.model.config.to_json_file(output_dir+"/config.json")
+    trainer.model.config.to_json_file(output_dir + "/config.json")
     print(
         "\n If there's a warning about missing keys above, please disregard :)"
     )

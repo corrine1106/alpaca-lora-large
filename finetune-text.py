@@ -19,18 +19,27 @@ from peft import (
     prepare_model_for_kbit_training,
     set_peft_model_state_dict,
 )
-from transformers import LlamaForCausalLM, LlamaTokenizer, BitsAndBytesConfig, AutoConfig, AutoModelForCausalLM
+from transformers import (
+    LlamaForCausalLM,
+    LlamaTokenizer,
+    BitsAndBytesConfig,
+    AutoConfig,
+    AutoModelForCausalLM,
+)
 from accelerate import init_empty_weights, infer_auto_device_map
 from utils.prompter import Prompter
 
-from deepspeed.utils.zero_to_fp32 import get_fp32_state_dict_from_zero_checkpoint
+from deepspeed.utils.zero_to_fp32 import (
+    get_fp32_state_dict_from_zero_checkpoint,
+)
 
-torch.distributed.init_process_group(backend='nccl')
+torch.distributed.init_process_group(backend="nccl")
 # os.environ["MASTER_ADDR"] = "localhost"
 # os.environ["MASTER_PORT"] = "9994"  # modify if RuntimeError: Address already in use
 # os.environ["RANK"] = "0"
 # os.environ["LOCAL_RANK"] = "0"
 # os.environ["WORLD_SIZE"] = "1"
+
 
 def train(
     # model/data params
@@ -64,8 +73,8 @@ def train(
     resume_from_checkpoint: str = None,  # either training checkpoint or final adapter
     prompt_template_name: str = "alpaca",  # The prompt template to use, will default to alpaca.
     # Deepspeed
-    offload_folder: str = "", # Offload param path
-    ds_config_path: str = "ds_config_zero2.json", 
+    offload_folder: str = "",  # Offload param path
+    ds_config_path: str = "ds_config_zero2.json",
 ):
     if int(os.environ.get("LOCAL_RANK", 0)) == 0:
         print(
@@ -98,7 +107,7 @@ def train(
     assert (
         base_model
     ), "Please specify a --base_model, e.g. --base_model='huggyllama/llama-7b'"
-    
+
     gradient_accumulation_steps = batch_size // micro_batch_size
     prompter = Prompter(prompt_template_name)
 
@@ -106,7 +115,7 @@ def train(
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     # print(f'gradient_accumulation_steps: {gradient_accumulation_steps}')
     # print(f'world_size: {world_size}')
-    
+
     ddp = world_size != 1
     if ddp:
         device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
@@ -123,45 +132,52 @@ def train(
         os.environ["WANDB_WATCH"] = wandb_watch
     if len(wandb_log_model) > 0:
         os.environ["WANDB_LOG_MODEL"] = wandb_log_model
-    quantization_config = BitsAndBytesConfig(load_in_8bit=True,llm_int8_enable_fp32_cpu_offload=True)
+    quantization_config = BitsAndBytesConfig(
+        load_in_8bit=True, llm_int8_enable_fp32_cpu_offload=True
+    )
     # config = AutoConfig.from_pretrained(base_model)
 
     # with init_empty_weights():
     #     model = AutoModelForCausalLM.from_config(config)
     # device_map = infer_auto_device_map(model, max_memory={0: "15GiB", "cpu": "40GiB"})
     # print(device_map)
-    print('micro_batch_size,gradient_accumulation_steps',micro_batch_size,gradient_accumulation_steps,world_size)
+    print(
+        "micro_batch_size,gradient_accumulation_steps",
+        micro_batch_size,
+        gradient_accumulation_steps,
+        world_size,
+    )
     training_args = transformers.TrainingArguments(
-            per_device_train_batch_size=micro_batch_size,
-            gradient_accumulation_steps=gradient_accumulation_steps,
-            warmup_steps=100,
-            num_train_epochs=num_epochs,
-            learning_rate=learning_rate,
-            fp16=True,
-            logging_steps=10,
-            optim="adamw_torch",
-            evaluation_strategy="steps" if val_set_size > 0 else "no",
-            save_strategy="steps",
-            eval_steps=200 if val_set_size > 0 else None,
-            save_steps=200,
-            output_dir=output_dir,
-            save_total_limit=3,
-            load_best_model_at_end=True if val_set_size > 0 else False,
-            ddp_find_unused_parameters=False if ddp else None,
-            group_by_length=group_by_length,
-            report_to="wandb" if use_wandb else None,
-            run_name=wandb_run_name if use_wandb else None,
-            deepspeed=ds_config_path,
-        )
+        per_device_train_batch_size=micro_batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        warmup_steps=100,
+        num_train_epochs=num_epochs,
+        learning_rate=learning_rate,
+        fp16=True,
+        logging_steps=10,
+        optim="adamw_torch",
+        evaluation_strategy="steps" if val_set_size > 0 else "no",
+        save_strategy="steps",
+        eval_steps=200 if val_set_size > 0 else None,
+        save_steps=200,
+        output_dir=output_dir,
+        save_total_limit=3,
+        load_best_model_at_end=True if val_set_size > 0 else False,
+        ddp_find_unused_parameters=False if ddp else None,
+        group_by_length=group_by_length,
+        report_to="wandb" if use_wandb else None,
+        run_name=wandb_run_name if use_wandb else None,
+        deepspeed=ds_config_path,
+    )
 
     model = LlamaForCausalLM.from_pretrained(
         base_model,
         torch_dtype=torch.bfloat16,
         device_map=device_map,
         quantization_config=quantization_config,
-        offload_folder=offload_folder
+        offload_folder=offload_folder,
     )
-    
+
     tokenizer = LlamaTokenizer.from_pretrained(base_model)
 
     tokenizer.pad_token_id = (
@@ -192,7 +208,6 @@ def train(
         return result
 
     def generate_and_tokenize_prompt(data_point):
-
         tokenized_full_prompt = tokenize(
             data_point["text"], add_eos_token=add_eos_token
         )
@@ -204,16 +219,14 @@ def train(
 
     # with open(data_path, "r") as input_file:
     data = load_dataset(
-            "text", data_files={"train": data_path}, sample_by="paragraph"
-        )
+        "text", data_files={"train": data_path}, sample_by="paragraph"
+    )
     train_val = data["train"].train_test_split(
         test_size=val_set_size, shuffle=True, seed=42
     )
     train_data = train_val["train"].shuffle().map(generate_and_tokenize_prompt)
     val_data = train_val["test"].shuffle().map(generate_and_tokenize_prompt)
 
-
-    
     model = prepare_model_for_kbit_training(model)
 
     config = LoraConfig(
@@ -225,7 +238,6 @@ def train(
         task_type="CAUSAL_LM",
     )
     model = get_peft_model(model, config)
-
 
     if resume_from_checkpoint:
         # Check the available weights and load them
@@ -249,12 +261,11 @@ def train(
 
     model.print_trainable_parameters()  # Be more transparent about the % of trainable params.
 
-
     if not ddp and torch.cuda.device_count() > 1:
         # keeps Trainer from trying its own DataParallelism when more than 1 gpu is available
         model.is_parallelizable = True
         model.model_parallel = True
-    print('Start training')
+    print("Start training")
     trainer = transformers.Trainer(
         model=model,
         train_dataset=train_data,
@@ -279,7 +290,7 @@ def train(
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
     trainer.save_model(output_dir)
-    
+
     print(
         "\n If there's a warning about missing keys above, please disregard :)"
     )

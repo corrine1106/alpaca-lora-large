@@ -29,13 +29,14 @@ import deepspeed
 from safetensors import safe_open
 
 from lion_pytorch import Lion
+
 # os.environ["MASTER_ADDR"] = "localhost"
 # os.environ["MASTER_PORT"] = "9994"  # modify if RuntimeError: Address already in use
 # os.environ["RANK"] = "0"
 # os.environ["LOCAL_RANK"] = "0"
 # os.environ["WORLD_SIZE"] = "1"
 
-            
+
 def train(
     # model/data params
     base_model: str = "",  # the only required argument
@@ -49,7 +50,7 @@ def train(
     cutoff_len: int = 1024,
     val_set_size: int = 20,
     # lora hyperparams
-    lora_config: str = '',
+    lora_config: str = "",
     lora_r: int = 8,
     lora_alpha: int = 16,
     lora_dropout: float = 0.05,
@@ -69,8 +70,8 @@ def train(
     resume_from_checkpoint: str = None,  # either training checkpoint or final adapter
     prompt_template_name: str = "alpaca",  # The prompt template to use, will default to alpaca.
     # Deepspeed
-    offload_folder: str = "", # Offload param path
-    ds_config_path: str = "ds_config_zero3.json", 
+    offload_folder: str = "",  # Offload param path
+    ds_config_path: str = "ds_config_zero3.json",
 ):
     if int(os.environ.get("LOCAL_RANK", 0)) == 0:
         print(
@@ -103,7 +104,7 @@ def train(
     assert (
         base_model
     ), "Please specify a --base_model, e.g. --base_model='huggyllama/llama-7b'"
-    
+
     gradient_accumulation_steps = batch_size // micro_batch_size
     prompter = Prompter(prompt_template_name)
 
@@ -111,7 +112,7 @@ def train(
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     # print(f'gradient_accumulation_steps: {gradient_accumulation_steps}')
     # print(f'world_size: {world_size}')
-    
+
     ddp = world_size != 1
     if ddp:
         device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
@@ -134,14 +135,19 @@ def train(
     #     model = AutoModelForCausalLM.from_config(config)
     # device_map = infer_auto_device_map(model, max_memory={0: "15GiB", "cpu": "40GiB"})
     # print(device_map)
-    print('micro_batch_size,gradient_accumulation_steps',micro_batch_size,gradient_accumulation_steps,world_size)
+    print(
+        "micro_batch_size,gradient_accumulation_steps",
+        micro_batch_size,
+        gradient_accumulation_steps,
+        world_size,
+    )
     training_args = PPOConfig(
-            mini_batch_size = micro_batch_size,
-            learning_rate = learning_rate,
-            batch_size=batch_size,
-            is_peft_model=True,
-            ppo_epochs=num_epochs,
-        )
+        mini_batch_size=micro_batch_size,
+        learning_rate=learning_rate,
+        batch_size=batch_size,
+        is_peft_model=True,
+        ppo_epochs=num_epochs,
+    )
     lora_config = LoraConfig(
         r=lora_r,
         lora_alpha=lora_alpha,
@@ -242,7 +248,9 @@ def train(
         elif os.path.exists(safe_checkpoint_name):
             print(f"Restarting from {safe_checkpoint_name}")
             adapters_weights = {}
-            with safe_open(safe_checkpoint_name, framework="pt", device=0) as f:
+            with safe_open(
+                safe_checkpoint_name, framework="pt", device=0
+            ) as f:
                 for k in f.keys():
                     adapters_weights[k] = f.get_tensor(k)
             set_peft_model_state_dict(model, adapters_weights)
@@ -270,7 +278,10 @@ def train(
         model.is_parallelizable = True
         model.model_parallel = True
 
-    optimizer = Lion(filter(lambda p: p.requires_grad, model.parameters()), lr=training_args.learning_rate)
+    optimizer = Lion(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=training_args.learning_rate,
+    )
     trainer = PPOTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -297,7 +308,7 @@ def train(
     trainer.model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
 
-    trainer.model.config.to_json_file(output_dir+"/config.json")
+    trainer.model.config.to_json_file(output_dir + "/config.json")
     print(
         "\n If there's a warning about missing keys above, please disregard :)"
     )
