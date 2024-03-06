@@ -26,6 +26,7 @@ from transformers import (
     BitsAndBytesConfig,
     AutoConfig,
     AutoModelForCausalLM,
+    AutoTokenizer,
 )
 from transformers.trainer_callback import TrainerCallback
 from accelerate import init_empty_weights, infer_auto_device_map
@@ -169,7 +170,7 @@ def train(
         deepspeed=ds_config_path,
     )
 
-    model = LlamaForCausalLM.from_pretrained(
+    model = AutoModelForCausalLM.from_pretrained(
         base_model,
         torch_dtype=torch.float16,
         # device_map=device_map,
@@ -178,7 +179,7 @@ def train(
         attn_implementation="flash_attention_2",
     )
     # model = model.to_bettertransformer()
-    tokenizer = LlamaTokenizer.from_pretrained(base_model)
+    tokenizer = AutoTokenizer.from_pretrained(base_model)
 
     tokenizer.pad_token_id = (
         0  # unk. we want this to be different from the eos token
@@ -211,7 +212,7 @@ def train(
         full_prompt = prompter.generate_prompt(
             data_point["instruction"],
             data_point["input"],
-            data_point["output"],
+            data_point["ans"],
         )
         tokenized_full_prompt = tokenize(full_prompt)
         if not train_on_inputs:
