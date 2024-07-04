@@ -20,10 +20,9 @@ from peft import (
     set_peft_model_state_dict,
 )
 from transformers import (
-    LlamaForCausalLM,
-    LlamaTokenizer,
     BitsAndBytesConfig,
     AutoConfig,
+    AutoTokenizer,
     AutoModelForCausalLM,
 )
 from accelerate import init_empty_weights, infer_auto_device_map
@@ -39,7 +38,7 @@ torch.distributed.init_process_group(backend="nccl")
 # os.environ["RANK"] = "0"
 # os.environ["LOCAL_RANK"] = "0"
 # os.environ["WORLD_SIZE"] = "1"
-
+os.environ["HF_TOKEN"] = "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"
 
 def train(
     # model/data params
@@ -48,11 +47,11 @@ def train(
     output_dir: str = "./lora-alpaca",
     # training hyperparams
     batch_size: int = 128,
-    micro_batch_size: int = 2,
-    num_epochs: int = 3,
+    micro_batch_size: int = 1,
+    num_epochs: int = 1,
     learning_rate: float = 3e-4,
     cutoff_len: int = 1024,
-    val_set_size: int = 1000,
+    val_set_size: float = 0.1,
     # lora hyperparams
     lora_r: int = 8,
     lora_alpha: int = 16,
@@ -74,7 +73,7 @@ def train(
     prompt_template_name: str = "alpaca",  # The prompt template to use, will default to alpaca.
     # Deepspeed
     offload_folder: str = "",  # Offload param path
-    ds_config_path: str = "ds_config_zero2.json",
+    ds_config_path: str = "ds_config_zero3.json",
 ):
     if int(os.environ.get("LOCAL_RANK", 0)) == 0:
         print(
@@ -170,15 +169,14 @@ def train(
         deepspeed=ds_config_path,
     )
 
-    model = LlamaForCausalLM.from_pretrained(
+    model = AutoModelForCausalLM.from_pretrained(
         base_model,
         torch_dtype=torch.bfloat16,
-        device_map=device_map,
-        quantization_config=quantization_config,
         offload_folder=offload_folder,
+        attn_implementation="flash_attention_2",
     )
 
-    tokenizer = LlamaTokenizer.from_pretrained(base_model)
+    tokenizer = AutoTokenizer.from_pretrained(base_model)
 
     tokenizer.pad_token_id = (
         0  # unk. we want this to be different from the eos token
@@ -215,19 +213,19 @@ def train(
         return tokenized_full_prompt
 
     if not data_path.endswith(".txt"):
-        raise AssertionError(f"The data source should be an .txt file.")
+        data = load_dataset("text", data_dir=data_path)
+    else:
+        data = load_dataset(
+            "text", data_files={"train": data_path}, sample_by="paragraph"
+        )
+#         raise AssertionError(f"The data source should be an .txt file.")
 
-    # with open(data_path, "r") as input_file:
-    data = load_dataset(
-        "text", data_files={"train": data_path}, sample_by="paragraph"
-    )
     train_val = data["train"].train_test_split(
         test_size=val_set_size, shuffle=True, seed=42
     )
     train_data = train_val["train"].shuffle().map(generate_and_tokenize_prompt)
     val_data = train_val["test"].shuffle().map(generate_and_tokenize_prompt)
 
-    model = prepare_model_for_kbit_training(model)
 
     config = LoraConfig(
         r=lora_r,
@@ -288,8 +286,9 @@ def train(
         model = torch.compile(model)
 
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-
-    trainer.save_model(output_dir)
+    trainer.model.save_pretrained(output_dir)
+    tokenizer.save_pretrained(output_dir)
+#     trainer.save_model(output_dir)
 
     print(
         "\n If there's a warning about missing keys above, please disregard :)"
