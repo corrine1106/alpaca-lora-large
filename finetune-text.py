@@ -213,7 +213,7 @@ def train(
         return tokenized_full_prompt
 
     if not data_path.endswith(".txt"):
-        data = load_dataset("text", data_dir=data_path)
+        data = load_dataset("text", data_files=data_path)
     else:
         data = load_dataset(
             "text", data_files={"train": data_path}, sample_by="paragraph"
